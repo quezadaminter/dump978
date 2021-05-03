@@ -644,6 +644,37 @@ static void display_generic_data(uint8_t *data, uint16_t length, FILE *to)
     }
 }
 
+static void display_generic_data_json(uint8_t *data, uint16_t length, FILE *to)
+{
+    unsigned i;
+    
+    fprintf(to,
+            "\"Data\":\"");
+    for (i = 0; i < length; i += 16) {
+        unsigned j;
+        
+        if (i > 0)
+            fprintf(to, ", ");
+        
+        for (j = i; j < i+16; ++j) {
+            if (j < length)
+                fprintf(to, "%02X ", data[j]);
+            else
+                fprintf(to, "   ");
+        }
+        
+        // Don't print the decoded data because it may contain bytes
+        // representing the " and ' characters which makes the json
+        // parsers VERY unhappy.
+        //for (j = i; j < i+16 && j < length; ++j) {
+        //    fprintf(to, "%c", 
+        //            (data[j] >= 32 && data[j] < 127) ? data[j] : '.');
+        //}
+        //fprintf(to, "\n");
+    }
+    fprintf(to, "\"");
+}
+
 // The odd two-string-literals here is to avoid \0x3ABCDEF being interpreted as a single (very large valued) character
 static const char *dlac_alphabet = "\x03" "ABCDEFGHIJKLMNOPQRSTUVWXYZ\x1A\t\x1E\n| !\"#$%&'()*+,-./0123456789:;<=>?";
 
@@ -882,7 +913,110 @@ static void uat_display_fisb_frame(const struct fisb_apdu *apdu, FILE *to)
         display_generic_data(apdu->data, apdu->length, to);
         break;
     }                
-}            
+}
+
+static void uat_display_fisb_frame_json(const struct fisb_apdu *apdu, FILE *to)
+{
+    fprintf(to, "\"FIS-B\":\n{\n");
+    fprintf(to, 
+            "\"Flags\": \"%s%s%s%s\","
+            "\"Product_ID\":%u,"
+            "\"Product_ID_Desc\":\"(%s) - %s\",",
+            apdu->a_flag ? "A" : "",
+            apdu->g_flag ? "G" : "",
+            apdu->p_flag ? "P" : "",
+            apdu->s_flag ? "S" : "",
+            apdu->product_id,
+            get_fisb_product_name(apdu->product_id),
+            get_fisb_product_format(apdu->product_id));
+
+    fprintf(to, "\"Product_time\":\n");
+    fprintf(to, "{\n");
+    if (apdu->monthday_valid)
+        fprintf(to, "\"Month\":%u, \"Day\":%u,", apdu->month, apdu->day);
+    fprintf(to, "\"Hour\":%u, \"Minute\":\%u", apdu->hours, apdu->minutes);
+    if (apdu->seconds_valid)
+        fprintf(to, ",\"Seconds\":%u", apdu->seconds);
+    fprintf(to, "\n},\n");
+
+    switch (apdu->product_id) {
+    case 413:
+        {
+            // Generic text, DLAC
+            const char *text = decode_dlac(apdu->data, apdu->length);
+            const char *report = text;
+            
+            while (report) {
+                char report_buf[1024];
+                const char *next_report;
+                char *p, *r;
+                
+                next_report = strchr(report, '\x1e'); // RS
+                if (!next_report)
+                    next_report = strchr(report, '\x03'); // ETX
+                if (next_report) {
+                    memcpy(report_buf, report, next_report - report);
+                    report_buf[next_report - report] = 0;
+                    report = next_report + 1;
+                } else {
+                    strcpy(report_buf, report);
+                    report = NULL;
+                }
+                
+                if (!report_buf[0])
+                    continue;
+
+                r = report_buf;
+                p = strchr(r, ' ');
+                if (p) {
+                    *p = 0;
+                    fprintf(to,
+                            "\"Report_type\":\"%s\",",
+                            r);
+                    r = p+1;
+                }
+                
+                p = strchr(r, ' ');
+                if (p) {
+                    *p = 0;
+                    fprintf(to,
+                            "\"Report_location\":\"%s\",",
+                            r);
+                    r = p+1;
+                }
+                
+                p = strchr(r, ' ');
+                if (p) {
+                    *p = 0;
+                    fprintf(to,
+                            "\"Report_time\":\"%s\",",
+                            r);
+                    r = p+1;
+                }
+                
+                fprintf(to, "\"Text\":\"");
+                while(*r)
+                {
+                   char c = *r;
+                   // The json does not like new lines inside
+                   // string objects.
+                   if(c == '\n')
+                   {
+                      c = ',';
+                   }
+                   fprintf(to, "%c", c);
+                   r += 1;
+                }
+                fprintf(to, "\"");
+            }
+        }            
+        break;
+    default:
+        display_generic_data_json(apdu->data, apdu->length, to);
+        break;
+    }
+    fprintf(to, "\n}");
+}
 
 static const char *info_frame_type_names[16] = {
     "FIS-B APDU",
@@ -922,6 +1056,25 @@ static void uat_display_uplink_info_frame(const struct uat_uplink_info_frame *fr
     }
 }
 
+static void uat_display_uplink_info_frame_json(const struct uat_uplink_info_frame *frame, FILE *to)
+{
+    fprintf(to,
+            "\"Length\": %u,"
+            "\"Type\": %u,"
+            "\"Type_Desc\":\"%s\",",
+            frame->length,
+            frame->type,
+            info_frame_type_names[frame->type]);
+
+    if (frame->length > 0) {
+        if (frame->is_fisb)
+            uat_display_fisb_frame_json(&frame->fisb, to);
+        else {
+            display_generic_data(frame->data, frame->length, to);
+        }
+    }
+}
+
 void uat_display_uplink_mdb(const struct uat_uplink_mdb *mdb, FILE *to)
 {
     fprintf(to, 
@@ -946,4 +1099,46 @@ void uat_display_uplink_mdb(const struct uat_uplink_mdb *mdb, FILE *to)
         for (i = 0; i < mdb->num_info_frames; ++i)
             uat_display_uplink_info_frame(&mdb->info_frames[i], to);
     }
+}
+
+void uat_display_uplink_mdb_to_json(const struct uat_uplink_mdb *mdb, FILE *to)
+{
+   fprintf(to, "{\n");
+
+    fprintf(to, 
+            "   \"UPLINK\" :\n{"); 
+                                  
+    fprintf(to,                   
+            "   \"Site_Latitude\": %.4f, \"Lat_Valid\":\"%s\","
+            "   \"Site_Longitude\": %.4f,\"Lon_Valid\":\"%s\",",
+            mdb->lat, mdb->position_valid ? "yes" : "no",
+            mdb->lon, mdb->position_valid ? "yes" : "no");
+            
+    fprintf(to,
+            "  \"UTC_coupled\": \"%s\","
+            "  \"Slot_ID\": %u,"
+            "  \"TIS-B_Site_ID\": %u,",
+            mdb->utc_coupled ? "yes" : "no",
+            mdb->slot_id,
+            mdb->tisb_site_id);
+    
+    if (mdb->app_data_valid)
+    {
+       fprintf(to, "\"INFORMATION_FRAME\":\n[\n");
+        unsigned i;
+        for (i = 0; i < mdb->num_info_frames; ++i)
+        {
+           fprintf(to, "{\n");
+            uat_display_uplink_info_frame_json(&mdb->info_frames[i], to);
+           fprintf(to, "\n}");
+           if(i < (mdb->num_info_frames - 1))
+           {
+              fprintf(to, ",\n");
+           }
+        }
+        fprintf(to, "\n]\n");
+    }
+
+    fprintf(to, "}\n");
+    fprintf(to, "}\n");
 }

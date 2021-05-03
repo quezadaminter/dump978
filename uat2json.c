@@ -286,29 +286,36 @@ static void periodic_work()
 
 static void handle_frame(frame_type_t type, uint8_t *frame, int len, void *extra)
 {
-    struct uat_adsb_mdb mdb;
+    if(type == UAT_DOWNLINK)
+    {
+       struct uat_adsb_mdb mdb;
+       if (len == SHORT_FRAME_DATA_BYTES) {
+           if ((frame[0] >> 3) != 0) {
+               fprintf(stderr, "short frame with non-zero type\n");
+               return;
+           }
+       } else if (len == LONG_FRAME_DATA_BYTES) {
+           if ((frame[0] >> 3) == 0) {
+               fprintf(stderr, "long frame with zero type\n");
+               return;
+           }
+       } else {
+           fprintf(stderr, "odd frame size: %d\n", len);
+           return;
+       }
 
-    if (type != UAT_DOWNLINK)
-        return;
-
-    if (len == SHORT_FRAME_DATA_BYTES) {
-        if ((frame[0] >> 3) != 0) {
-            fprintf(stderr, "short frame with non-zero type\n");
-            return;
-        }
-    } else if (len == LONG_FRAME_DATA_BYTES) {
-        if ((frame[0] >> 3) == 0) {
-            fprintf(stderr, "long frame with zero type\n");
-            return;
-        }
-    } else {
-        fprintf(stderr, "odd frame size: %d\n", len);
-        return;
+       uat_decode_adsb_mdb(frame, &mdb);
+       //uat_display_adsb_mdb(&mdb, stdout);    
+       process_mdb(&mdb);
     }
-
-    uat_decode_adsb_mdb(frame, &mdb);
-    //uat_display_adsb_mdb(&mdb, stdout);    
-    process_mdb(&mdb);
+    else
+    {
+       // UPLINK
+       struct uat_uplink_mdb mdb;
+       uat_decode_uplink_mdb(frame, &mdb);
+       uat_display_uplink_mdb_to_json(&mdb, stdout);
+       //uat_display_uplink_mdb(&mdb, stdout);
+    }
 }                                                        
 
 static void read_loop()

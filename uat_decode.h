@@ -188,5 +188,6 @@ struct uat_uplink_mdb {
 
 void uat_decode_uplink_mdb(uint8_t *frame, struct uat_uplink_mdb *mdb);
 void uat_display_uplink_mdb(const struct uat_uplink_mdb *mdb, FILE *to);
+void uat_display_uplink_mdb_to_json(const struct uat_uplink_mdb *mdb, FILE *to);
 
 #endif
